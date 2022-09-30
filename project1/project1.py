@@ -30,23 +30,33 @@ def plot_surface(ax = None, fig = None, **kwargs):
     fig.colorbar(surf, shrink=0.5, aspect=5)
     return fig, ax
 
-def make_design_matrix(xvec, deg):
-    X = np.ones(tuple([xvec.shape[0], deg+1] + list(xvec.shape[1:])))*np.nan
-    for i in range(X.shape[0]):
-        for n in range(deg+1):
-            if n == 0:
-                X[i, n] = 2
-            else:
-                X[i, n] = xvec[i]**n
-    ds = xr.Dataset(coords = {'x%i'%i : (['nx%i'%i for i in range(X.shape[0])], X[i,1]) for i in range(X.shape[0])},
-                    data_vars = {'design_matrix' : (['vars', 'deg'] + ['nx%i'%i for i in range(X.shape[0])], X)})
-    return X.T, ds
+from itertools import combinations_with_replacement
+def make_design_matrix(xvec, p):
+    xi = {"x%i"%i : xvec[i].ravel() for i in range(len(xvec))}
+    keys = [key for key in xi.keys()]
+    comb = []
+    for p in range(1,p+1):
+        comb += [x for x in combinations_with_replacement(keys, p )]
+    #print(comb)
+    X = np.ones((len(xi["x0"].ravel()), len(comb)+1))
+    for j in range(len(X)):
+        i = 0
+        for c in comb:
+            xij = 1
+            for key in c:
+                #print(key, i)
+                xij *= xi[key][j]
+            X[j,i+1] = xij
+            i+=1
+    return X
 
-def ols_fp(xvec, f=FrankeFunction, deg = 2):
-    X = make_design_matrix(xvec = xvec, deg = deg)
-    z = f(**{'x%i'%(i) : xvec[i] for i in range(len(xvec))})
-    noise = np.random.normal(0,1, size=z.shape)
+def ols_fp(xvec, f=FrankeFunction, p= 2):
+    X = make_design_matrix(xvec = xvec, p = p)
+    z = f(**{'x%i'%i: xvec[i].ravel() for i in range(len(xvec))})
+    noise = np.random.normal(0,1,size=z.shape)
     znoisy = z + noise
-    betahat = np.array([np.linalg.inv(X[i].T@X[i])@X[i].T@znoisy for i in range(len(X))])
-    znoisy_tilde = np.sum(np.array([X[i]@betahat[i] for i in range(len(X))]), axis=0)
-    return znoisy_tilde, X, noise
+    znoisy_centered = znoisy - np.mean(znoisy)
+    A = np.linalg.pinv(X.T@X)@X.T
+    betahat = A@znoisy_centered
+    znoisy_tilde = X@betahat
+    return znoisy_tilde, X, znoisy_centered
