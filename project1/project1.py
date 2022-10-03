@@ -66,12 +66,13 @@ def ols_fp(xvec, f=FrankeFunction, p= 2, mu = 0, sigma = 1, return_betas=False):
 from sklearn.model_selection import train_test_split
 def ols_fp_train_test_split(X, y, **kwargs):
     ycentered = y - np.mean(y)
-    Xtrain, Xtest, ytrain, ytest = train_test_split(X, ycentered, **kwargs)
+    Xtrain, Xtest, ytrain, ytest = train_test_split(X, y, **kwargs)
     # computing beta params with train set
+    ytrain_centered = ytrain - np.mean(ytrain)
     A = np.linalg.pinv(Xtrain.T@Xtrain)@Xtrain.T
-    betahat = A@ytrain
-    ytilde_train = Xtrain@betahat + np.mean(y)
-    ytilde_test = Xtest@betahat + np.mean(y)
+    betahat = A@ytrain_centered
+    ytilde_train = Xtrain@betahat + np.mean(ytrain)
+    ytilde_test = Xtest@betahat + np.mean(ytest)
     return ytilde_train, ytilde_test, betahat, Xtrain, Xtest, ytrain,ytest
 
 
@@ -83,3 +84,15 @@ def Rscore(y, ytilde):
     SSres = np.sum((y-ytilde)**2)
     SStot = np.sum((y-mean)**2)
     return 1 - SSres/SStot
+
+def bias(y, ytilde):
+    return np.mean((y-np.mean(ytilde))**2)
+
+def bootstrap(data, k, keys_ops = {'mean' : np.mean, 'var' : np.var}):
+    stats = {key : np.zeros(k) for key in keys_ops.keys()}
+    n = len(data.ravel())
+    for i in range(k):
+        for key in stats.keys():
+                stats[key][i] = keys_ops[key](data.ravel()[np.random.randint(0,n,n)])
+    return stats
+    
