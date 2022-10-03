@@ -50,13 +50,36 @@ def make_design_matrix(xvec, p):
             i+=1
     return X
 
-def ols_fp(xvec, f=FrankeFunction, p= 2):
+def ols_fp(xvec, f=FrankeFunction, p= 2, mu = 0, sigma = 1, return_betas=False):
     X = make_design_matrix(xvec = xvec, p = p)
     z = f(**{'x%i'%i: xvec[i].ravel() for i in range(len(xvec))})
-    noise = np.random.normal(0,1,size=z.shape)
+    noise = np.random.normal(mu,sigma,size=z.shape)
     znoisy = z + noise
     znoisy_centered = znoisy - np.mean(znoisy)
     A = np.linalg.pinv(X.T@X)@X.T
     betahat = A@znoisy_centered
-    znoisy_tilde = X@betahat
-    return znoisy_tilde, X, znoisy_centered
+    znoisy_tilde = X@betahat + np.mean(znoisy)
+    if return_betas:
+        return znoisy_tilde, X, znoisy_centered, znoisy, betahat
+    return znoisy_tilde, X, znoisy_centered, znoisy
+
+from sklearn.model_selection import train_test_split
+def ols_fp_train_test_split(X, y, **kwargs):
+    ycentered = y - np.mean(y)
+    Xtrain, Xtest, ytrain, ytest = train_test_split(X, ycentered, **kwargs)
+    # computing beta params with train set
+    A = np.linalg.pinv(Xtrain.T@Xtrain)@Xtrain.T
+    betahat = A@ytrain
+    ytilde_train = Xtrain@betahat + np.mean(y)
+    ytilde_test = Xtest@betahat + np.mean(y)
+    return ytilde_train, ytilde_test, betahat, Xtrain, Xtest, ytrain,ytest
+
+
+def MSE(y, ytilde):
+    return np.mean((y-ytilde)**2)
+
+def Rscore(y, ytilde):
+    mean = np.mean(y)
+    SSres = np.sum((y-ytilde)**2)
+    SStot = np.sum((y-mean)**2)
+    return 1 - SSres/SStot
