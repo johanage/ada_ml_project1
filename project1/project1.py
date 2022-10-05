@@ -66,14 +66,26 @@ def ols_fp(xvec, f=FrankeFunction, p= 2, mu = 0, sigma = 1, return_betas=False):
 from sklearn.model_selection import train_test_split
 def ols_fp_train_test_split(X, y, **kwargs):
     ycentered = y - np.mean(y)
-    Xtrain, Xtest, ytrain, ytest = train_test_split(X, y, **kwargs)
+    Xtrain, Xtest, ytrain, ytest = train_test_split(X, ycentered, **kwargs)
     # computing beta params with train set
-    ytrain_centered = ytrain - np.mean(ytrain)
     A = np.linalg.pinv(Xtrain.T@Xtrain)@Xtrain.T
-    betahat = A@ytrain_centered
-    ytilde_train = Xtrain@betahat + np.mean(ytrain)
-    ytilde_test = Xtest@betahat + np.mean(ytest)
+    betahat = A@ytrain
+    ytilde_train = Xtrain@betahat + np.mean(y)
+    ytilde_test = Xtest@betahat + np.mean(y)
     return ytilde_train, ytilde_test, betahat, Xtrain, Xtest, ytrain,ytest
+
+def ridge_fp_train_test_split(X, y, lmbda, **kwargs):
+    ycentered = y - np.mean(y)
+    Xtrain, Xtest, ytrain, ytest = train_test_split(X, ycentered, **kwargs)
+    p = Xtrain.shape[1]
+    # computing beta params with train set
+    A = np.linalg.inv(Xtrain.T@Xtrain + np.eye(p, p)*lmbda)@Xtrain.T
+    print(np.eye(p,p)*lmbda)
+    betahat = A@ytrain
+    ytilde_train = Xtrain@betahat + np.mean(y)
+    ytilde_test = Xtest@betahat + np.mean(y)
+    return ytilde_train, ytilde_test, betahat, Xtrain, Xtest, ytrain,ytest
+
 
 
 def MSE(y, ytilde):
