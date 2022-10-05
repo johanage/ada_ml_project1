@@ -163,9 +163,12 @@ def cross_validation(data, xvec, k, p, method):
     for x in split:
         total = total + list(x)
     #print( np.sort(np.array(b[total])) )
-
-    mses = np.zeros((k))
-
+    mses_train = np.zeros((k))
+    mses_test = np.zeros((k))
+    bias_train = np.zeros((k))
+    bias_test = np.zeros((k))
+    var_train = np.zeros((k))
+    var_test = np.zeros((k))
     for itest in range(k):
         test = split[itest]
         train = np.array([x for x in total if x not in test])
@@ -175,5 +178,11 @@ def cross_validation(data, xvec, k, p, method):
             data_tilde_train, betahat = ols_fp_wo_split(X = Xtrain, y = data[train])
             data_tilde_test = Xtest@betahat
             mse_test = MSE(y = data[test], ytilde = data_tilde_test)
-            mses[itest] = mse_test
-    return mses
+            mse_train = MSE(y = data[train], ytilde = data_tilde_train)
+            mses_test[itest] = mse_test
+            mses_train[itest] = mse_train
+            bias_train[itest] = bias(y = data[train], ytilde = data_tilde_train)
+            bias_test[itest] = bias(y = data[test], ytilde = data_tilde_test)
+            var_train[itest] = np.var(data_tilde_train)
+            var_test[itest] = np.var(data_tilde_test)
+    return mses_train, mses_test, bias_train, bias_test, var_train, var_test
