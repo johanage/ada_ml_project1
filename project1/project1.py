@@ -63,6 +63,14 @@ def ols_fp(xvec, f=FrankeFunction, p= 2, mu = 0, sigma = 1, return_betas=False):
         return znoisy_tilde, X, znoisy_centered, znoisy, betahat
     return znoisy_tilde, X, znoisy_centered, znoisy
 
+def ols_fp_wo_split(X, y, **kwargs):
+    ycentered = y - np.mean(y)
+    # computing beta params with train set
+    A = np.linalg.pinv(X.T@X)@X.T
+    betahat = A@y
+    ytilde = X@betahat + np.mean(y)
+    return ytilde, betahat
+
 from sklearn.model_selection import train_test_split
 def ols_fp_train_test_split(X, y, **kwargs):
     ycentered = y - np.mean(y)
@@ -80,7 +88,7 @@ def ridge_fp_train_test_split(X, y, lmbda, **kwargs):
     p = Xtrain.shape[1]
     # computing beta params with train set
     A = np.linalg.inv(Xtrain.T@Xtrain + np.eye(p, p)*lmbda)@Xtrain.T
-    print(np.eye(p,p)*lmbda)
+    #print(np.eye(p,p)*lmbda)
     betahat = A@ytrain
     ytilde_train = Xtrain@betahat + np.mean(y)
     ytilde_test = Xtest@betahat + np.mean(y)
@@ -100,11 +108,72 @@ def Rscore(y, ytilde):
 def bias(y, ytilde):
     return np.mean((y-np.mean(ytilde))**2)
 
+def resample(data):
+    n = len(data.ravel())
+    return data.ravel()[np.random.randint(0,n,n)]
+
 def bootstrap(data, k, keys_ops = {'mean' : np.mean, 'var' : np.var}):
     stats = {key : np.zeros(k) for key in keys_ops.keys()}
-    n = len(data.ravel())
     for i in range(k):
         for key in stats.keys():
-                stats[key][i] = keys_ops[key](data.ravel()[np.random.randint(0,n,n)])
+            data_resampled = resample(data=data)
+            stats[key][i] = keys_ops[key](data_resampled)
     return stats
-    
+
+def cross_validation(data, xvec, k, p, method):
+    """
+    Args:
+
+    data - data to be fitted, ndarray
+    k - number of folds, int
+    p - polynomial degree, int
+
+    Out:
+
+
+    mses - MSEs for each train test pair, np array with dim = (k,)
+
+    """
+    # b is flat array of data to fit
+    b = data.ravel()
+    indices = np.arange(len(b))
+    np.random.shuffle(indices)
+    n = int(np.floor(len(b)/k ))
+    split = []
+    # iterate over the k folds
+    for i in range(k):
+        # the last fold
+        if i == k-1:
+            sel = indices[i*n:]
+            # give away excessive (more than 1 sample more than the other folds)
+            # samples in last fold to other folds
+            if len(sel) - n > 1:
+                j = 0
+                # iterate and add excessive samples
+                for x in sel[-(len(sel)-n-1):]:
+                    split[j] = np.array(list(split[j]) + [x])
+                    indx = j + len(sel)-n-1
+                    sel = np.delete(sel,indx)
+                    j+=1
+        else:
+            sel = indices[i*n:i*n+n]
+        split.append(sel)
+    # compute the total flat array for controlling that all samples have been used
+    total = []
+    for x in split:
+        total = total + list(x)
+    #print( np.sort(np.array(b[total])) )
+
+    mses = np.zeros((k))
+
+    for itest in range(k):
+        test = split[itest]
+        train = np.array([x for x in total if x not in test])
+        Xtrain = make_design_matrix(xvec = np.array([x.ravel()[train] for x in xvec]), p = p)
+        Xtest  = make_design_matrix(xvec = np.array([x.ravel()[test] for x in xvec]), p = p)
+        if method == "ols":
+            data_tilde_train, betahat = ols_fp_wo_split(X = Xtrain, y = data[train])
+            data_tilde_test = Xtest@betahat
+            mse_test = MSE(y = data[test], ytilde = data_tilde_test)
+            mses[itest] = mse_test
+    return mses
