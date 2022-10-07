@@ -37,38 +37,22 @@ def make_design_matrix(xvec, p):
     comb = []
     for p in range(1,p+1):
         comb += [x for x in combinations_with_replacement(keys, p )]
-    #print(comb)
     X = np.ones((len(xi["x0"].ravel()), len(comb)+1))
     for j in range(len(X)):
         i = 0
         for c in comb:
             xij = 1
             for key in c:
-                #print(key, i)
                 xij *= xi[key][j]
             X[j,i+1] = xij
             i+=1
     return X
 
-def ols_fp(xvec, f=FrankeFunction, p= 2, mu = 0, sigma = 1, return_betas=False):
-    X = make_design_matrix(xvec = xvec, p = p)
-    z = f(**{'x%i'%i: xvec[i].ravel() for i in range(len(xvec))})
-    noise = np.random.normal(mu,sigma,size=z.shape)
-    znoisy = z + noise
-    znoisy_centered = znoisy - np.mean(znoisy)
-    A = np.linalg.pinv(X.T@X)@X.T
-    betahat = A@znoisy_centered
-    znoisy_tilde = X@betahat + np.mean(znoisy)
-    if return_betas:
-        return znoisy_tilde, X, znoisy_centered, znoisy, betahat
-    return znoisy_tilde, X, znoisy_centered, znoisy
-
 def ols_fp_wo_split(X, y, **kwargs):
-    ycentered = y - np.mean(y)
     # computing beta params with train set
     A = np.linalg.pinv(X.T@X)@X.T
     betahat = A@y
-    ytilde = X@betahat + np.mean(y)
+    ytilde = X@betahat
     return ytilde, betahat
 
 from sklearn.model_selection import train_test_split
@@ -76,24 +60,38 @@ def ols_fp_train_test_split(X, y, **kwargs):
     ycentered = y - np.mean(y)
     Xtrain, Xtest, ytrain, ytest = train_test_split(X, ycentered, **kwargs)
     # computing beta params with train set
-    A = np.linalg.pinv(Xtrain.T@Xtrain)@Xtrain.T
-    betahat = A@ytrain
-    ytilde_train = Xtrain@betahat + np.mean(y)
+    ytilde_train, betahat = ols_fp_wo_split(X=Xtrain, y=ytrain)
+    ytilde_train += np.mean(y)
     ytilde_test = Xtest@betahat + np.mean(y)
     return ytilde_train, ytilde_test, betahat, Xtrain, Xtest, ytrain,ytest
+
+def ridge_fp_wo_split(X, y, lmbda, **kwargs):
+    # computing beta params with train set
+    p = X.shape[1]
+    A = np.linalg.inv(X.T@X + np.eye(p, p)*lmbda)@X.T
+    #print(np.eye(p,p)*lmbda)
+    betahat = A@y
+    ytilde = X@betahat
+    return ytilde, betahat
 
 def ridge_fp_train_test_split(X, y, lmbda, **kwargs):
     ycentered = y - np.mean(y)
     Xtrain, Xtest, ytrain, ytest = train_test_split(X, ycentered, **kwargs)
-    p = Xtrain.shape[1]
-    # computing beta params with train set
-    A = np.linalg.inv(Xtrain.T@Xtrain + np.eye(p, p)*lmbda)@Xtrain.T
-    #print(np.eye(p,p)*lmbda)
-    betahat = A@ytrain
+    ytilde_train, betahat = ridge_fp_wo_split(X=Xtrain, y=ytrain, lmbda=lmbda)
     ytilde_train = Xtrain@betahat + np.mean(y)
     ytilde_test = Xtest@betahat + np.mean(y)
     return ytilde_train, ytilde_test, betahat, Xtrain, Xtest, ytrain,ytest
 
+from sklearn import linear_model
+def lasso_fp_train_test_split(X, y, lmbda, **kwargs):
+    ycentered = y - np.mean(y)
+    Xtrain, Xtest, ytrain, ytest = train_test_split(X, ycentered, **kwargs)
+    clf = linear_model.Lasso(alpha = lmbda)
+    clf.fit(X = Xtrain, y = ytrain)
+    betahat = clf.coef_
+    ytilde_train = Xtrain@betahat + np.mean(y)
+    ytilde_test = Xtest@betahat + np.mean(y)
+    return ytilde_train, ytilde_test, betahat, Xtrain, Xtest, ytrain,ytest
 
 
 def MSE(y, ytilde):
@@ -119,8 +117,8 @@ def bootstrap(data, k, keys_ops = {'mean' : np.mean, 'var' : np.var}):
             data_resampled = resample(data=data)
             stats[key][i] = keys_ops[key](data_resampled)
     return stats
-
-def cross_validation(data, xvec, k, p, method):
+from sklearn import linear_model
+def cross_validation(data, xvec, k, p, method, lmbda = None):
     """
     Args:
 
@@ -175,14 +173,34 @@ def cross_validation(data, xvec, k, p, method):
         Xtrain = make_design_matrix(xvec = np.array([x.ravel()[train] for x in xvec]), p = p)
         Xtest  = make_design_matrix(xvec = np.array([x.ravel()[test] for x in xvec]), p = p)
         if method == "ols":
-            data_tilde_train, betahat = ols_fp_wo_split(X = Xtrain, y = data[train])
-            data_tilde_test = Xtest@betahat
-            mse_test = MSE(y = data[test], ytilde = data_tilde_test)
-            mse_train = MSE(y = data[train], ytilde = data_tilde_train)
-            mses_test[itest] = mse_test
-            mses_train[itest] = mse_train
-            bias_train[itest] = bias(y = data[train], ytilde = data_tilde_train)
-            bias_test[itest] = bias(y = data[test], ytilde = data_tilde_test)
-            var_train[itest] = np.var(data_tilde_train)
-            var_test[itest] = np.var(data_tilde_test)
+            data_tilde_train, betahat = ols_fp_wo_split(X = Xtrain, y = data[train]-np.mean(data[train]))
+            data_tilde_train += np.mean(data[train])
+            data_tilde_test = Xtest@betahat + np.mean(data[train])
+        if method == "lasso":
+            if lmbda is None:
+                raise ValueError("Lambda value has not been set")
+            clf_train = linear_model.Lasso(alpha = lmbda)
+            clf_train.fit(X=Xtrain, y = data[train]-np.mean(data[train]))
+            betahat = clf_train.coef_
+            data_tilde_train = Xtrain@betahat + np.mean(data[train])
+            data_tilde_test = Xtest@betahat + np.mean(data[train])
+        if method == "ridge":
+            if lmbda is None:
+                raise ValueError("Lambda value has not been set")
+            data_tilde_train, betahat = ridge_fp_wo_split(X=Xtrain, y=data[train]-np.mean(data[train]), lmbda=lmbda)
+            data_tilde_train += np.mean(data[train])
+            data_tilde_test = Xtest@betahat + np.mean(data[train])
+        mses_train[itest] = MSE(y = data[train], ytilde = data_tilde_train)
+        mses_test[itest]  = MSE(y = data[test], ytilde = data_tilde_test)
+        bias_train[itest] = bias(y = data[train], ytilde = data_tilde_train)
+        bias_test[itest]  = bias(y = data[test], ytilde = data_tilde_test)
+        var_train[itest]  = np.var(data_tilde_train)
+        var_test[itest]   = np.var(data_tilde_test)
+
     return mses_train, mses_test, bias_train, bias_test, var_train, var_test
+
+
+def lasso_fp(X, y, lmbda, **kwargs):
+   
+
+    return 0 
