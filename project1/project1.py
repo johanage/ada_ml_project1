@@ -48,6 +48,22 @@ def make_design_matrix(xvec, p):
             i+=1
     return X
 
+def create_X(x, y, n ):
+	if len(x.shape) > 1:
+		x = np.ravel(x)
+		y = np.ravel(y)
+
+	N = len(x)
+	l = int((n+1)*(n+2)/2)		# Number of elements in beta
+	X = np.ones((N,l))
+
+	for i in range(1,n+1):
+		q = int((i)*(i+1)/2)
+		for k in range(i+1):
+			X[:,q+k] = (x**(i-k))*(y**k)
+
+	return X
+
 def ols_fp_wo_split(X, y, **kwargs):
     # computing beta params with train set
     A = np.linalg.pinv(X.T@X)@X.T
@@ -57,15 +73,21 @@ def ols_fp_wo_split(X, y, **kwargs):
 
 from sklearn.model_selection import train_test_split
 def ols_fp_train_test_split(X, y, **kwargs):
-    ycentered = y - np.mean(y)
-    Xtrain, Xtest, ytrain, ytest = train_test_split(X, ycentered, **kwargs)
+    Xtrain, Xtest, ytrain, ytest = train_test_split(X, y, **kwargs)
     # computing beta params with train set
-    ytilde_train, betahat = ols_fp_wo_split(X=Xtrain, y=ytrain)
-    ytilde_train += np.mean(y)
-    ytilde_test = Xtest@betahat + np.mean(y)
+    ytilde_train, betahat = ols_fp_wo_split(X=Xtrain, y=ytrain-np.mean(ytrain))
+    ytilde_train += np.mean(ytrain)
+    ytilde_test = Xtest@betahat + np.mean(ytrain)
     return ytilde_train, ytilde_test, betahat, Xtrain, Xtest, ytrain,ytest
 
+def center_X(X):
+    for j in range(X.shape[1]):
+        X[j] -= - np.mean(X[:,j], axis=0)
+    return X
+
 def ridge_fp_wo_split(X, y, lmbda, **kwargs):
+    # centering inputs
+    X = center_X(X=X)
     # computing beta params with train set
     p = X.shape[1]
     A = np.linalg.inv(X.T@X + np.eye(p, p)*lmbda)@X.T
@@ -75,14 +97,30 @@ def ridge_fp_wo_split(X, y, lmbda, **kwargs):
     return ytilde, betahat
 
 def ridge_fp_train_test_split(X, y, lmbda, **kwargs):
-    ycentered = y - np.mean(y)
+    """
+    X has len=p not len=p+1 (cols with 1s is removed)
+
+    """
+    if np.sum(X[:,0] == np.ones(X.shape[1])) == X.shape[1]:
+        raise ValueError(" First column of the design matrix needs to be removed")
+    # centering inputs
+    X = center_X(X=X)
+    # split into training and test sets
     Xtrain, Xtest, ytrain, ytest = train_test_split(X, ycentered, **kwargs)
+    # compute predictor for training and test set and add intercept
     ytilde_train, betahat = ridge_fp_wo_split(X=Xtrain, y=ytrain, lmbda=lmbda)
     ytilde_train = Xtrain@betahat + np.mean(y)
     ytilde_test = Xtest@betahat + np.mean(y)
     return ytilde_train, ytilde_test, betahat, Xtrain, Xtest, ytrain,ytest
 
 from sklearn import linear_model
+def lasso_fp_wo_split(X, y, lmbda, **kwargs):
+    clf = linear_model.Lasso(alpha = lmbda)
+    clf.fit(X = X, y = y-np.mean(y))
+    betahat = clf.coef_
+    ytilde = X@betahat + np.mean(y)
+    return ytilde, betahat
+
 def lasso_fp_train_test_split(X, y, lmbda, **kwargs):
     ycentered = y - np.mean(y)
     Xtrain, Xtest, ytrain, ytest = train_test_split(X, ycentered, **kwargs)
@@ -117,50 +155,32 @@ def bootstrap(data, k, keys_ops = {'mean' : np.mean, 'var' : np.var}):
             data_resampled = resample(data=data)
             stats[key][i] = keys_ops[key](data_resampled)
     return stats
+
 from sklearn import linear_model
 def cross_validation(data, xvec, k, p, method, lmbda = None):
     """
     Args:
-
     data - data to be fitted, ndarray
     k - number of folds, int
     p - polynomial degree, int
 
     Out:
-
-
     mses - MSEs for each train test pair, np array with dim = (k,)
 
     """
     # b is flat array of data to fit
     b = data.ravel()
-    indices = np.arange(len(b))
+    # make array of indices of flattened data array
+    indices = np.arange(len(b.ravel()))
+    # make array of indices to split at
+    isplit = np.full(k, len(b.ravel()) // k, dtype = int)
+    isplit[:len(b.ravel()) % k] += 1
+    isplit = np.cumsum(isplit)
+    # shuffle the indices for random selection of datapoints
     np.random.shuffle(indices)
-    n = int(np.floor(len(b)/k ))
-    split = []
-    # iterate over the k folds
-    for i in range(k):
-        # the last fold
-        if i == k-1:
-            sel = indices[i*n:]
-            # give away excessive (more than 1 sample more than the other folds)
-            # samples in last fold to other folds
-            if len(sel) - n > 1:
-                j = 0
-                # iterate and add excessive samples
-                for x in sel[-(len(sel)-n-1):]:
-                    split[j] = np.array(list(split[j]) + [x])
-                    indx = j + len(sel)-n-1
-                    sel = np.delete(sel,indx)
-                    j+=1
-        else:
-            sel = indices[i*n:i*n+n]
-        split.append(sel)
-    # compute the total flat array for controlling that all samples have been used
-    total = []
-    for x in split:
-        total = total + list(x)
-    #print( np.sort(np.array(b[total])) )
+    # split the datasets in k folds
+    splits = np.split(np.arange(len(b.ravel()))[indices], isplit[:-1])
+    # initiating the inferences
     mses_train = np.zeros((k))
     mses_test = np.zeros((k))
     bias_train = np.zeros((k))
@@ -168,39 +188,44 @@ def cross_validation(data, xvec, k, p, method, lmbda = None):
     var_train = np.zeros((k))
     var_test = np.zeros((k))
     for itest in range(k):
-        test = split[itest]
-        train = np.array([x for x in total if x not in test])
-        Xtrain = make_design_matrix(xvec = np.array([x.ravel()[train] for x in xvec]), p = p)
-        Xtest  = make_design_matrix(xvec = np.array([x.ravel()[test] for x in xvec]), p = p)
+        # make sure that indices of flattened arraysare ints and not objects
+        test = splits[itest]
+        test = np.array(test,dtype=int)
+        train = np.concatenate(np.delete(splits, itest, axis=0))
+        train = np.array(train, dtype=int)
+
+        #Xtrain = make_design_matrix(xvec = np.array([x.ravel()[train] for x in xvec]), p = p)
+        Xtrain = create_X(x = xvec[0].ravel()[train], y = xvec[1].ravel()[train], n = p)
+        #Xtest = make_design_matrix(xvec = np.array([x.ravel()[test] for x in xvec]), p = p)
+        Xtest = create_X(x = xvec[0].ravel()[test], y = xvec[1].ravel()[test], n = p)
         if method == "ols":
-            data_tilde_train, betahat = ols_fp_wo_split(X = Xtrain, y = data[train]-np.mean(data[train]))
-            data_tilde_train += np.mean(data[train])
-            data_tilde_test = Xtest@betahat + np.mean(data[train])
+            data_tilde_train, betahat = ols_fp_wo_split(X = Xtrain, y = b[train] - np.mean(b[train]))
+            data_tilde_train += np.mean(b[train])
+            data_tilde_test = Xtest@betahat + np.mean(b[train])
         if method == "lasso":
+            Xtrain = Xtrain[:,1:]
+            Xtest =  Xtest[:,1:]
             if lmbda is None:
                 raise ValueError("Lambda value has not been set")
             clf_train = linear_model.Lasso(alpha = lmbda)
-            clf_train.fit(X=Xtrain, y = data[train]-np.mean(data[train]))
+            clf_train.fit(X=Xtrain, y = b[train]-np.mean(b[train]))
             betahat = clf_train.coef_
-            data_tilde_train = Xtrain@betahat + np.mean(data[train])
-            data_tilde_test = Xtest@betahat + np.mean(data[train])
+            data_tilde_train = Xtrain@betahat + np.mean(b[train])
+            data_tilde_test = Xtest@betahat + np.mean(b[train])
         if method == "ridge":
+            Xtrain = Xtrain[:,1:]
+            Xtest =  Xtest[:,1:]
             if lmbda is None:
                 raise ValueError("Lambda value has not been set")
-            data_tilde_train, betahat = ridge_fp_wo_split(X=Xtrain, y=data[train]-np.mean(data[train]), lmbda=lmbda)
-            data_tilde_train += np.mean(data[train])
-            data_tilde_test = Xtest@betahat + np.mean(data[train])
-        mses_train[itest] = MSE(y = data[train], ytilde = data_tilde_train)
-        mses_test[itest]  = MSE(y = data[test], ytilde = data_tilde_test)
-        bias_train[itest] = bias(y = data[train], ytilde = data_tilde_train)
-        bias_test[itest]  = bias(y = data[test], ytilde = data_tilde_test)
+            data_tilde_train, betahat = ridge_fp_wo_split(X=Xtrain, y=b[train]-np.mean(b[train]), lmbda=lmbda)
+            data_tilde_train += np.mean(b[train])
+            data_tilde_test = Xtest@betahat + np.mean(b[train])
+        mses_train[itest] = MSE(y = b[train], ytilde = data_tilde_train)
+        mses_test[itest]  = MSE(y = b[test], ytilde = data_tilde_test)
+        bias_train[itest] = bias(y = b[train], ytilde = data_tilde_train)
+        bias_test[itest]  = bias(y = b[test], ytilde = data_tilde_test)
         var_train[itest]  = np.var(data_tilde_train)
         var_test[itest]   = np.var(data_tilde_test)
 
     return mses_train, mses_test, bias_train, bias_test, var_train, var_test
 
-
-def lasso_fp(X, y, lmbda, **kwargs):
-   
-
-    return 0 
