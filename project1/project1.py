@@ -85,57 +85,48 @@ def scale_center_X(X):
     Xscaled[np.isnan(Xscaled)] = 0
     return Xscaled
 
-def ridge_fp_wo_split(X, y, lmbda, centering = False, **kwargs):
-    # centering inputs
-    if centering == True:
-        X = center_X(X=X)
+def ridge_fp_wo_split(X, y, lmbda, **kwargs):
     # computing beta params with train set
     p = X.shape[1]
-    A = np.linalg.inv(X.T@X + np.eye(p, p)*lmbda)@X.T
+    X_scaled = scale_center_X(X = X)
+    A = np.linalg.inv(X_scaled.T@X_scaled + np.eye(p, p)*lmbda)@X_scaled.T
     #print(np.eye(p,p)*lmbda)
-    betahat = A@y
-    ytilde = X@betahat
+    ymean = np.mean(y)
+    betahat = A@(y-ymean)
+    ytilde = X_scaled@betahat + ymean
     return ytilde, betahat
 
-def ridge_fp_train_test_split(X, y, lmbda, centering = False, **kwargs):
+def ridge_fp_train_test_split(X, y, lmbda, **kwargs):
     """
     X has len=p not len=p+1 (cols with 1s is removed)
 
     """
     if np.sum(X[:,0] == np.ones(X.shape[1])) == X.shape[1]:
         raise ValueError(" First column of the design matrix needs to be removed")
-    # centering inputs
-    if centering == True:
-        X = center_X(X=X)
     # split into training and test sets
     Xtrain, Xtest, ytrain, ytest = train_test_split(X, ycentered, **kwargs)
     # compute predictor for training and test set and add intercept
-    ytilde_train, betahat = ridge_fp_wo_split(X=Xtrain, y=ytrain, lmbda=lmbda)
-    ytilde_train = Xtrain@betahat + np.mean(y)
-    ytilde_test = Xtest@betahat + np.mean(y)
+    ytilde_train, betahat = ridge_fp_wo_split(X=Xtrain, y=ytrain - np.mean(ytrain), lmbda=lmbda)
+    ytilde_train = Xtrain@betahat + np.mean(ytrain)
+    ytilde_test = Xtest@betahat + np.mean(ytrain)
     return ytilde_train, ytilde_test, betahat, Xtrain, Xtest, ytrain,ytest
 
 from sklearn import linear_model
-def lasso_fp_wo_split(X, y, lmbda, centering = False, **kwargs):
-    # centering inputs
-    if centering == True:
-        X = center_X(X=X)
-    clf = linear_model.Lasso(alpha = lmbda)
-    clf.fit(X = X, y = y-np.mean(y))
+def lasso_fp_wo_split(X, y, lmbda, **kwargs):
+    clf = linear_model.Lasso(alpha = lmbda, **kwargs)
+    X_scaled = scale_center_X(X = X)
+    clf.fit(X = X_scaled, y = y-np.mean(y))
     betahat = clf.coef_
-    ytilde = X@betahat + np.mean(y)
+    ytilde = X_scaled@betahat + np.mean(y)
     return ytilde, betahat
 
-def lasso_fp_train_test_split(X, y, lmbda, centering = False, **kwargs):
-    # centering inputs
-    if centering == True:
-        X = center_X(X=X)
+def lasso_fp_train_test_split(X, y, lmbda, **kwargs):
     Xtrain, Xtest, ytrain, ytest = train_test_split(X, y, **kwargs)
-    clf = linear_model.Lasso(alpha = lmbda)
-    clf.fit(X = Xtrain, y = ytrain)
+    clf = linear_model.Lasso(alpha = lmbda, fit_intercept=True)
+    clf.fit(X = Xtrain, y = ytrain-np.mean(ytrain))
     betahat = clf.coef_
-    ytilde_train = Xtrain@betahat + np.mean(y)
-    ytilde_test = Xtest@betahat + np.mean(y)
+    ytilde_train = Xtrain@betahat + np.mean(ytrain)
+    ytilde_test = Xtest@betahat + np.mean(ytrain)
     return ytilde_train, ytilde_test, betahat, Xtrain, Xtest, ytrain,ytest
 
 
@@ -164,18 +155,12 @@ def bootstrap(data, k, keys_ops = {'mean' : np.mean, 'var' : np.var}):
     return stats
 
 from sklearn import linear_model
-def cross_validation(data, xvec, k, p, method, lmbda = None, scale_centering = False, scale = False, factor=1):
+def kfold(data, k, random_state = 42):
     """
-    Args:
-    data - data to be fitted, ndarray
-    k - number of folds, int
-    p - polynomial degree, int
-    centering - centering the design matrix, bool 
-
-    Out:
-    mses - MSEs for each train test pair, np array with dim = (k,)
-
+    Args: data to fit, ndarray
+    Out: splits, array of indices on where to split the data array
     """
+    np.random.seed(random_state)
     # b is flat array of data to fit
     b = data.ravel()
     # make array of indices of flattened data array
@@ -187,6 +172,21 @@ def cross_validation(data, xvec, k, p, method, lmbda = None, scale_centering = F
     np.random.shuffle(indices)
     # split the datasets in k folds
     splits = np.split(np.arange(len(b.ravel()))[indices], isplit[:-1])
+    return splits
+
+def cross_validation(data, splits, xvec, k, p, method, lmbda = None, scale_centering = False, scale = False, factor=1):
+    """
+    Args:
+    data - data to be fitted, ndarray
+    k - number of folds, int
+    p - polynomial degree, int
+    centering - centering the design matrix, bool 
+
+    Out:
+    mses - MSEs for each train test pair, np array with dim = (k,)
+
+    """
+    b = data.ravel()
     # initiating the inferences
     mses_train = np.zeros((k))
     mses_test = np.zeros((k))
@@ -199,7 +199,7 @@ def cross_validation(data, xvec, k, p, method, lmbda = None, scale_centering = F
         test = splits[itest]
         test = np.array(test,dtype=int)
         train = np.concatenate(np.delete(splits, itest, axis=0))
-        train = np.array(train, dtype=int)
+        train = np.sort(np.array(train, dtype=int))
         if len(xvec) == 1:
             X = np.zeros((len(xvec[0]), p+1))
             X[:,0] = 1
@@ -217,29 +217,31 @@ def cross_validation(data, xvec, k, p, method, lmbda = None, scale_centering = F
             data_tilde_test = Xtest@betahat
         if method == "lasso":
             Xtrain = Xtrain[:,1:]
+            Xtest = Xtest[:,1:]
             if scale_centering == True:
                 mean_Xtrain = np.mean(Xtrain, axis=0)
                 std_Xtrain = np.std(Xtrain, axis = 0)
-                Xtest =  (Xtest[:,1:] - mean_Xtrain)/std_Xtrain
+                Xtest =  (Xtest - mean_Xtrain)/std_Xtrain
                 Xtrain = scale_center_X(X=Xtrain)
             if lmbda is None:
                 raise ValueError("Lambda value has not been set")
-            clf_train = linear_model.Lasso(alpha = lmbda)
+            clf_train = linear_model.Lasso(alpha = lmbda, fit_intercept=True)
             clf_train.fit(X=Xtrain, y = b[train]-np.mean(b[train]))
             betahat = clf_train.coef_
             data_tilde_train = Xtrain@betahat + np.mean(b[train])
             data_tilde_test = Xtest@betahat + np.mean(b[train])
         if method == "ridge":
             Xtrain = Xtrain[:,1:]
+            Xtest = Xtest[:,1:]
             if scale_centering == True:
                 mean_Xtrain = np.mean(Xtrain, axis=0)
                 std_Xtrain = np.std(Xtrain,axis=0)
-                Xtest =  (Xtest[:,1:]-mean_Xtrain)/std_Xtrain  
+                Xtest =  (Xtest - mean_Xtrain)/std_Xtrain  
                 Xtrain = scale_center_X(X=Xtrain)
             if lmbda is None:
                 raise ValueError("Lambda value has not been set")
             data_tilde_train, betahat = ridge_fp_wo_split(X=Xtrain, y=b[train]-np.mean(b[train]), lmbda=lmbda)
-            data_tilde_train = (data_tilde_train + np.mean(b[train]))
+            data_tilde_train = data_tilde_train + np.mean(b[train])
             data_tilde_test = Xtest@betahat + np.mean(b[train])
             data_tilde_test = Xtest@betahat + np.mean(b[train])
         mses_train[itest] = MSE(y = b[train], ytilde = data_tilde_train)
@@ -251,3 +253,36 @@ def cross_validation(data, xvec, k, p, method, lmbda = None, scale_centering = F
 
     return mses_train, mses_test, bias_train, bias_test, var_train, var_test
 
+def beta_lasso(y, betahat, lmbda):
+    """
+    Args:
+    beta - lasso params
+    y - data to fit
+    Out: update beta params
+                    yi - lambda/2, if yi > lambda/2
+    beta_lasso =    yi + lambda/2, if yi < -lambda/2
+                    0            ,if |yi|<=lambda/2
+    """
+    beta_lasso = beta.copy()*np.nan
+    inds_above_lhalf = y > lmbda/2
+    inds_below_minlhalf = y < -lmbda/2
+    inds_other = np.abs(y) <= lmbda/2
+    beta_lasso[inds_above_lhalf] = y[inds_above_lhalf]-lmbda/2
+    beta_lasso[inds_below_lhalf] = y[inds_below_lhalf]+lmbda/2
+    beta_lasso[inds_other] = 0
+    return beta_lasso
+
+def Cmin_lasso(y, betahat, lmbda):
+    return -2*np.sum(y-betahat) + lmbda*np.sum(np.sign(betahat))
+
+
+def OWN_lasso_fp_wo_split(X, y, lmbda, **kwargs):
+    threshold = kwargs['threshold']
+    maxiter = kwargs['maxiter']
+    # initating betas with OLS and then improving betas by lasso
+    ytilde, betahat = ols_fp_wo_split(X = X, y = y)
+    for i in maxiter:
+        betahat = beta_lasso(y = y, betahat = betahat, lmbda = lmbda)
+        if Cmin_lasso(y = y, betahat = betahat, lmbda = lmbda) < threshold:
+            ytilde = X @ betahat
+            return ytilde, betahat
