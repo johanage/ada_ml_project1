@@ -81,7 +81,9 @@ def ols_fp_train_test_split(X, y, **kwargs):
     return ytilde_train, ytilde_test, betahat, Xtrain, Xtest, ytrain,ytest
 
 def scale_center_X(X):
-    return (X - np.mean(X, axis=0))/np.std(X, axis=0)
+    Xscaled = (X - np.mean(X, axis=0))/np.std(X, axis=0)
+    Xscaled[np.isnan(Xscaled)] = 0
+    return Xscaled
 
 def ridge_fp_wo_split(X, y, lmbda, centering = False, **kwargs):
     # centering inputs
